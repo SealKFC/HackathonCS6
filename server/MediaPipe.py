@@ -16,6 +16,8 @@ import warnings
 import csv
 import os
 from flask_cors import CORS
+import cvzone
+from cvzone.PoseModule import PoseDetector
 
 warnings.filterwarnings(
     "ignore", 
@@ -76,11 +78,24 @@ def stop_camera():
     is_streaming = False
     return jsonify({'status': 'Camera streaming stopped'}), 200
 
+shirtFolderPath = "Resources/Shirts"
+listShirts = os.listdir(shirtFolderPath)
+fixedRatio = 262 / 190
+shirtRatioHeightWidth = 581 / 440
+imageNumber = 0
+imgButtonRight = cv2.imread("Resources/button.png", cv2.IMREAD_UNCHANGED)
+imgButtonLeft = cv2.flip(imgButtonRight, 1)
+counterRight = 0
+counterLeft = 0
+selectionSpeed = 10
+
 def generate_frames():
     cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
     counter = 0
     predicted_stage = None 
-    global is_streaming
+    global is_streaming, imageNumber, counterRight, counterLeft
     predicted_class = None
 
     with mp_pose.Pose(min_detection_confidence=0.5,
@@ -108,8 +123,9 @@ def generate_frames():
                 mp_drawing.DrawingSpec(color=(245,66,230), thickness=2, circle_radius=2)
             )
             
+            confidence_value = 0.0
+
             if results.pose_landmarks:
-                # Extract keypoints for 33 landmarks (x, y, z, visibility) -> 132 features.
                 keypoints = np.array([
                     [landmark.x, landmark.y, landmark.z, landmark.visibility]
                     for landmark in results.pose_landmarks.landmark
@@ -130,7 +146,6 @@ def generate_frames():
                     continue
 
                 # Get confidence value if available.
-                confidence_value = 0.0
                 probabilities = model.predict_proba(keypoints)
                 confidence_value = np.max(probabilities)
 
@@ -138,23 +153,85 @@ def generate_frames():
                 if predicted_class == 'deadlift: down' and predicted_stage == 'deadlift: up':
                     counter += 1
                     print("Rep counted! Total reps:", counter)
-
                 if predicted_class == 'deadlift: lean left' and predicted_stage == 'deadlift: lean right':
                     counter += 1
                     print("Re-center yourself:", counter)
 
                 predicted_stage  = predicted_class
 
+                h, w, _ = image.shape
+                landmarks = results.pose_landmarks.landmark
+
+                # Extract left and right shoulder landmarks (MediaPipe indices 11 and 12)
+                lm11 = [int(landmarks[11].x * w), int(landmarks[11].y * h)]
+                lm12 = [int(landmarks[12].x * w), int(landmarks[12].y * h)]
+
+                # Load the shirt image (ensure shirtFolderPath, listShirts, imageNumber exist)
+                imgShirt = cv2.imread(os.path.join(shirtFolderPath, listShirts[imageNumber]), cv2.IMREAD_UNCHANGED)
+                if imgShirt is None:
+                    print("Error loading shirt image!")
+                    continue
+
+                # Calculate the desired width and height of the shirt overlay.
+                widthOfShirt = int(abs(lm11[0] - lm12[0]) * fixedRatio)
+                widthOfShirt = max(widthOfShirt, 1)  # prevent zero width
+                heightOfShirt = int(widthOfShirt * shirtRatioHeightWidth)
+                heightOfShirt = max(heightOfShirt, 1)  # prevent zero height
+
+                try:
+                    imgShirt = cv2.resize(imgShirt, (widthOfShirt, heightOfShirt))
+                except Exception as e:
+                    print("Error resizing shirt:", e)
+                    continue
+
+                currentScale = (lm11[0] - lm12[0]) / 190
+                offset = (int(44 * currentScale), int(48 * currentScale))
+
+                try:
+                    # Overlay the shirt image onto the main image.
+                    image = cvzone.overlayPNG(image, imgShirt, (lm12[0] - offset[0], lm12[1] - offset[1]))
+                except Exception as e:
+                    print("Error overlaying shirt:", e)
+                    pass
+
+                posRight = (int(w * 0.06), int(h * 0.40))
+                posLeft = (int(w * 0.84), int(h * 0.40))
+                image = cvzone.overlayPNG(image, imgButtonRight, posRight)
+                image = cvzone.overlayPNG(image, imgButtonLeft, posLeft)
+                right_wrist = (int(landmarks[16].x * w), int(landmarks[16].y * h))
+                left_wrist = (int(landmarks[15].x * w), int(landmarks[15].y * h))
+                distRight = np.linalg.norm(np.array(right_wrist) - np.array(posRight))
+                distLeft = np.linalg.norm(np.array(left_wrist) - np.array(posLeft))
+                proximityThreshold = 100
+                
+                if distRight < proximityThreshold:
+                    counterRight += 1
+                    cv2.ellipse(image, posRight, (66, 66), 0, 0,
+                                counterRight * selectionSpeed, (0, 255, 0), 20)
+                    if counterRight * selectionSpeed > 360:
+                        counterRight = 0
+                        if imageNumber < len(listShirts) - 1:
+                            imageNumber += 1
+                elif distLeft < proximityThreshold:
+                    counterLeft += 1
+                    cv2.ellipse(image, posLeft, (66, 66), 0, 0,
+                                counterLeft * selectionSpeed, (0, 255, 0), 20)
+                    if counterLeft * selectionSpeed > 360:
+                        counterLeft = 0
+                        if imageNumber > 0:
+                            imageNumber -= 1
+                else:
+                    counterRight = 0
+                    counterLeft = 0
+
+
                 if show_angles:
-                    landmarks = results.pose_landmarks.landmark
-            
-                    # Extract the x,y coordinates for the left hip, knee, and ankle
-                    left_hip = [landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x,
-                                landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y]
-                    left_knee = [landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].x,
-                                landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].y]
-                    left_ankle = [landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].x,
-                                landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].y]
+                    left_hip = [int(landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x * w),
+                                int(landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y * h)]
+                    left_knee = [int(landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].x * w),
+                                 int(landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].y * h)]
+                    left_ankle = [int(landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].x * w),
+                                  int(landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].y * h)]
                     
                     # Calculate the angle at the left knee
                     angle = calculate_angle(left_hip, left_knee, left_ankle)
