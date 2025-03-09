@@ -23,10 +23,8 @@ Follow the official [MediaPipe documentation](https://google.github.io/mediapipe
 
 ```bash
 git clone https://github.com/yourusername/getswole.git
-cd getswole/backend
-npm install
-cp .env.example .env
-npm start
+cd ./server
+python MediaPipe.py
 ```
 
 ### Frontend
@@ -35,16 +33,6 @@ npm start
 cd ../frontend
 npm install
 npm start
-```
-
-### Python Model
-
-```bash
-cd ../models
-pip install -r requirements.txt
-# Download the pretrained model (if available)
-wget https://example.com/path-to-your-model
-python run_model.py
 ```
 
 ## Usage
