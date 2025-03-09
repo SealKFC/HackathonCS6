@@ -1,7 +1,3 @@
-Below is a more concise README file for your "Get Swole" project:
-
----
-
 # Get Swole
 
 Get Swole is a fullstack web application that boosts gym performance by analyzing your form in real-time. It leverages MediaPipe for pose landmark detection and a custom model to verify full exercise repetitions.
